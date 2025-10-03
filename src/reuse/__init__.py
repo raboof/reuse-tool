@@ -1,89 +1,37 @@
 # SPDX-FileCopyrightText: 2017 Free Software Foundation Europe e.V. <https://fsfe.org>
 # SPDX-FileCopyrightText: 2021 Alliander N.V.
+# SPDX-FileCopyrightText: 2023 Carmen Bianca BAKKER <carmenbianca@fsfe.org>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""reuse is a tool for compliance with the REUSE recommendations."""
+"""reuse is a tool for compliance with the REUSE recommendations.
 
-import gettext
-import logging
-import os
-import re
-from typing import NamedTuple, Set
+Although the API is documented, it is **NOT** guaranteed stable between minor or
+even patch releases. The semantic versioning of this program pertains
+exclusively to the reuse CLI command. If you want to use reuse as a Python
+library, you should pin reuse to an exact version.
 
-from boolean.boolean import Expression
-from pkg_resources import DistributionNotFound, get_distribution
+Having given the above disclaimer, the API has been relatively stable
+nevertheless, and we (the maintainers) do make some efforts to not needlessly
+change the public API.
+"""
+
+# TODO: When Python 3.9 is dropped, consider using `type | None` instead of
+# `Optional[type]`.
+
+from importlib.metadata import PackageNotFoundError, version
+
+from license_expression import Licensing
 
 try:
-    __version__ = get_distribution(__name__).version
-except DistributionNotFound:
+    __version__ = version("reuse")
+except PackageNotFoundError:
     # package is not installed
-    __version__ = "1.0.0"
+    __version__ = "5.1.1"
 
 __author__ = "Carmen Bianca Bakker"
 __email__ = "carmenbianca@fsfe.org"
-__license__ = "GPL-3.0-or-later"
-__REUSE_version__ = "3.0"
+__license__ = "Apache-2.0 AND CC0-1.0 AND CC-BY-SA-4.0 AND GPL-3.0-or-later"
+__REUSE_version__ = "3.3"
 
-_LOGGER = logging.getLogger(__name__)
-
-_PACKAGE_PATH = os.path.dirname(__file__)
-_LOCALE_DIR = os.path.join(_PACKAGE_PATH, "locale")
-
-if gettext.find("reuse", localedir=_LOCALE_DIR):
-    gettext.bindtextdomain("reuse", _LOCALE_DIR)
-    gettext.textdomain("reuse")
-    _LOGGER.debug("translations found at %s", _LOCALE_DIR)
-else:
-    _LOGGER.debug("no translations found at %s", _LOCALE_DIR)
-
-
-_IGNORE_DIR_PATTERNS = [
-    re.compile(r"^\.git$"),
-    re.compile(r"^\.hg$"),
-    re.compile(r"^LICENSES$"),
-    re.compile(r"^\.reuse$"),
-]
-
-_IGNORE_MESON_PARENT_DIR_PATTERNS = [
-    re.compile(r"^subprojects$"),
-]
-
-_IGNORE_FILE_PATTERNS = [
-    re.compile(r"^LICENSE"),
-    re.compile(r"^COPYING"),
-    # ".git" as file happens in submodules
-    re.compile(r"^\.git$"),
-    re.compile(r"^\.gitkeep$"),
-    re.compile(r"^\.hgtags$"),
-    re.compile(r".*\.license$"),
-    # Workaround for https://github.com/fsfe/reuse-tool/issues/229
-    re.compile(r"^CAL-1.0(-Combined-Work-Exception)?(\..+)?$"),
-    re.compile(r"^SHL-2.1(\..+)?$"),
-]
-
-_IGNORE_SPDX_PATTERNS = [
-    # SPDX files from
-    # https://spdx.github.io/spdx-spec/conformance/#44-standard-data-format-requirements
-    re.compile(r".*\.spdx$"),
-    re.compile(r".*\.spdx.(rdf|json|xml|ya?ml)$"),
-]
-
-# Combine SPDX patterns into file patterns to ease default ignore usage
-_IGNORE_FILE_PATTERNS.extend(_IGNORE_SPDX_PATTERNS)
-
-#: Simple structure for holding SPDX information.
-#:
-#: The two iterables MUST be sets.
-SpdxInfo = NamedTuple(
-    "SpdxInfo",
-    [("spdx_expressions", Set[Expression]), ("copyright_lines", Set[str])],
-)
-
-
-class ReuseException(Exception):
-    """Base exception."""
-
-
-class IdentifierNotFound(ReuseException):
-    """Could not find SPDX identifier for license file."""
+_LICENSING = Licensing()

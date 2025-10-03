@@ -6,17 +6,17 @@ name: Verify that the license lists are up-to-date
 
 on:
   schedule:
-    - cron: "0 9 * * *"
+    - cron: "0 9 * * 1"
 
 jobs:
   license-list-up-to-date:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v2
         with:
           fetch-depth: 0
       - name: Set up Python
-        uses: actions/setup-python@v1
+        uses: actions/setup-python@v2
         with:
           python-version: 3.x
       - name: Verify that the license lists are up-to-date

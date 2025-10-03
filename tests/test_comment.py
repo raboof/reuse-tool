@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: 2019 Free Software Foundation Europe e.V. <https://fsfe.org>
+# SPDX-FileCopyrightText: 2023 Maxim Cournoyer <maxim.cournoyer@gmail.com>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""All tests for reuse._comment"""
+"""All tests for reuse.comment"""
 
 # pylint: disable=protected-access,invalid-name,redefined-outer-name
 
@@ -11,15 +12,17 @@ from textwrap import dedent
 
 import pytest
 
-from reuse._comment import (
-    CCommentStyle,
-    CommentCreateError,
-    CommentParseError,
+from reuse.comment import (
+    BladeCommentStyle,
     CommentStyle,
+    CppCommentStyle,
     HtmlCommentStyle,
+    LispCommentStyle,
     PythonCommentStyle,
     _all_style_classes,
+    get_comment_style,
 )
+from reuse.exceptions import CommentCreateError, CommentParseError
 
 
 @pytest.fixture(
@@ -56,9 +59,9 @@ def test_create_comment_generic_multi(MultiStyle):
     text = "Hello"
     expected = cleandoc(
         f"""
-        {MultiStyle.MULTI_LINE[0]}
-        {MultiStyle.INDENT_BEFORE_MIDDLE}{MultiStyle.MULTI_LINE[1]}{MultiStyle.INDENT_AFTER_MIDDLE}Hello
-        {MultiStyle.INDENT_BEFORE_END}{MultiStyle.MULTI_LINE[2]}
+        {MultiStyle.MULTI_LINE.start}
+        {MultiStyle.INDENT_BEFORE_MIDDLE}{MultiStyle.MULTI_LINE.middle}{MultiStyle.INDENT_AFTER_MIDDLE}Hello
+        {MultiStyle.INDENT_BEFORE_END}{MultiStyle.MULTI_LINE.end}
         """
     )
 
@@ -78,9 +81,23 @@ def test_parse_comment_generic_multi(MultiStyle):
     # pylint: disable=line-too-long
     text = cleandoc(
         f"""
-        {MultiStyle.MULTI_LINE[0]}
-        {MultiStyle.INDENT_BEFORE_MIDDLE}{MultiStyle.MULTI_LINE[1]}{MultiStyle.INDENT_AFTER_MIDDLE}Hello
-        {MultiStyle.INDENT_BEFORE_END}{MultiStyle.MULTI_LINE[2]}
+        {MultiStyle.MULTI_LINE.start}
+        {MultiStyle.INDENT_BEFORE_MIDDLE}{MultiStyle.MULTI_LINE.middle}{MultiStyle.INDENT_AFTER_MIDDLE}Hello
+        {MultiStyle.INDENT_BEFORE_END}{MultiStyle.MULTI_LINE.end}
+        """
+    )
+    expected = "Hello"
+
+    assert MultiStyle.parse_comment(text) == expected
+
+
+def test_parse_comment_sameline_multi(MultiStyle):
+    """If a multi-line comment style is on a single line, it should still be
+    parsed.
+    """
+    text = cleandoc(
+        f"""
+        {MultiStyle.MULTI_LINE.start} Hello {MultiStyle.MULTI_LINE.end}
         """
     )
     expected = "Hello"
@@ -220,8 +237,8 @@ def test_parse_comment_python_multi_error():
         PythonCommentStyle._parse_comment_multi("Hello world")
 
 
-def test_create_comment_c_single():
-    """Create a C comment with single-line comments."""
+def test_create_comment_cpp_single():
+    """Create a C++ comment with single-line comments."""
     text = cleandoc(
         """
         Hello
@@ -235,11 +252,11 @@ def test_create_comment_c_single():
         """
     )
 
-    assert CCommentStyle.create_comment(text) == expected
+    assert CppCommentStyle.create_comment(text) == expected
 
 
-def test_parse_comment_c_single():
-    """Parse a C comment with single-line comments."""
+def test_parse_comment_cpp_single():
+    """Parse a C++ comment with single-line comments."""
     text = cleandoc(
         """
         // Hello
@@ -253,11 +270,11 @@ def test_parse_comment_c_single():
         """
     )
 
-    assert CCommentStyle.parse_comment(text) == expected
+    assert CppCommentStyle.parse_comment(text) == expected
 
 
-def test_create_comment_c_multi():
-    """Create a C comment with multi-line comments."""
+def test_create_comment_cpp_multi():
+    """Create a C++ comment with multi-line comments."""
     text = cleandoc(
         """
         Hello
@@ -273,11 +290,11 @@ def test_create_comment_c_multi():
         """
     )
 
-    assert CCommentStyle.create_comment(text, force_multi=True) == expected
+    assert CppCommentStyle.create_comment(text, force_multi=True) == expected
 
 
-def test_create_comment_c_multi_empty_newlines():
-    """Create a C comment that contains empty lines."""
+def test_create_comment_cpp_multi_empty_newlines():
+    """Create a C++ comment that contains empty lines."""
     text = cleandoc(
         """
         Hello
@@ -295,11 +312,11 @@ def test_create_comment_c_multi_empty_newlines():
         """
     )
 
-    assert CCommentStyle.create_comment(text, force_multi=True) == expected
+    assert CppCommentStyle.create_comment(text, force_multi=True) == expected
 
 
-def test_create_comment_c_multi_surrounded_by_newlines():
-    """Create a C comment that is surrounded by empty lines."""
+def test_create_comment_cpp_multi_surrounded_by_newlines():
+    """Create a C++ comment that is surrounded by empty lines."""
     text = "\nHello\nworld\n"
     expected = cleandoc(
         """
@@ -312,10 +329,10 @@ def test_create_comment_c_multi_surrounded_by_newlines():
         """
     )
 
-    assert CCommentStyle.create_comment(text, force_multi=True) == expected
+    assert CppCommentStyle.create_comment(text, force_multi=True) == expected
 
 
-def test_create_comment_c_multi_contains_ending():
+def test_create_comment_cpp_multi_contains_ending():
     """Raise CommentCreateError when the text contains a comment ending."""
     text = cleandoc(
         """
@@ -326,11 +343,11 @@ def test_create_comment_c_multi_contains_ending():
     )
 
     with pytest.raises(CommentCreateError):
-        CCommentStyle.create_comment(text, force_multi=True)
+        CppCommentStyle.create_comment(text, force_multi=True)
 
 
-def test_parse_comment_c_multi():
-    """Parse a C comment with multi-line comments."""
+def test_parse_comment_cpp_multi():
+    """Parse a C++ comment with multi-line comments."""
     text = cleandoc(
         """
         /*
@@ -345,11 +362,11 @@ def test_parse_comment_c_multi():
         world
         """
     )
-    assert CCommentStyle.parse_comment(text) == expected
+    assert CppCommentStyle.parse_comment(text) == expected
 
 
-def test_parse_comment_c_multi_missing_middle():
-    """Parse a C comment even though the middle markers are missing."""
+def test_parse_comment_cpp_multi_missing_middle():
+    """Parse a C++ comment even though the middle markers are missing."""
     text = cleandoc(
         """
         /*
@@ -365,11 +382,11 @@ def test_parse_comment_c_multi_missing_middle():
         """
     )
 
-    assert CCommentStyle.parse_comment(text) == expected
+    assert CppCommentStyle.parse_comment(text) == expected
 
 
-def test_parse_comment_c_multi_misaligned_end():
-    """Parse a C comment even though the end is misaligned."""
+def test_parse_comment_cpp_multi_misaligned_end():
+    """Parse a C++ comment even though the end is misaligned."""
     text = cleandoc(
         """
         /*
@@ -385,7 +402,7 @@ def test_parse_comment_c_multi_misaligned_end():
         """
     )
 
-    assert CCommentStyle.parse_comment(text) == expected
+    assert CppCommentStyle.parse_comment(text) == expected
 
     text = cleandoc(
         """
@@ -402,11 +419,11 @@ def test_parse_comment_c_multi_misaligned_end():
         """
     )
 
-    assert CCommentStyle.parse_comment(text) == expected
+    assert CppCommentStyle.parse_comment(text) == expected
 
 
-def test_parse_comment_c_multi_no_middle():
-    """Parse a C comment that has no middle whatsoever."""
+def test_parse_comment_cpp_multi_no_middle():
+    """Parse a C++ comment that has no middle whatsoever."""
     text = cleandoc(
         """
         /* Hello
@@ -420,11 +437,11 @@ def test_parse_comment_c_multi_no_middle():
         """
     )
 
-    assert CCommentStyle.parse_comment(text) == expected
+    assert CppCommentStyle.parse_comment(text) == expected
 
 
-def test_parse_comment_c_multi_ends_at_last():
-    """Parse a C comment that treats the last line like a regular line."""
+def test_parse_comment_cpp_multi_ends_at_last():
+    """Parse a C++ comment that treats the last line like a regular line."""
     text = cleandoc(
         """
         /*
@@ -439,11 +456,11 @@ def test_parse_comment_c_multi_ends_at_last():
         """
     )
 
-    assert CCommentStyle.parse_comment(text) == expected
+    assert CppCommentStyle.parse_comment(text) == expected
 
 
-def test_parse_comment_c_multi_starts_at_first():
-    """Parse a C comment that treats the first line like a regular line."""
+def test_parse_comment_cpp_multi_starts_at_first():
+    """Parse a C++ comment that treats the first line like a regular line."""
     text = cleandoc(
         """
         /* Hello
@@ -458,11 +475,11 @@ def test_parse_comment_c_multi_starts_at_first():
         """
     )
 
-    assert CCommentStyle.parse_comment(text) == expected
+    assert CppCommentStyle.parse_comment(text) == expected
 
 
-def test_parse_comment_c_multi_indented():
-    """Preserve indentations in C comments."""
+def test_parse_comment_cpp_multi_indented():
+    """Preserve indentations in C++ comments."""
     text = cleandoc(
         """
         /*
@@ -478,37 +495,37 @@ def test_parse_comment_c_multi_indented():
         """
     )
 
-    assert CCommentStyle.parse_comment(text) == expected
+    assert CppCommentStyle.parse_comment(text) == expected
 
 
-def test_parse_comment_c_multi_single_line():
+def test_parse_comment_cpp_multi_single_line():
     """Parse a single-line multi-line comment."""
     text = "/* Hello world */"
     expected = "Hello world"
 
-    assert CCommentStyle.parse_comment(text) == expected
+    assert CppCommentStyle.parse_comment(text) == expected
 
 
-def test_parse_comment_c_multi_no_start():
+def test_parse_comment_cpp_multi_no_start():
     """Raise CommentParseError when there is no comment starter."""
     text = "Hello world */"
 
     with pytest.raises(CommentParseError):
-        CCommentStyle.parse_comment(text)
+        CppCommentStyle.parse_comment(text)
 
     with pytest.raises(CommentParseError):
-        CCommentStyle._parse_comment_multi(text)
+        CppCommentStyle._parse_comment_multi(text)
 
 
-def test_parse_comment_c_multi_no_end():
+def test_parse_comment_cpp_multi_no_end():
     """Raise CommentParseError when there is no comment end."""
     text = "/* Hello world"
 
     with pytest.raises(CommentParseError):
-        CCommentStyle.parse_comment(text)
+        CppCommentStyle.parse_comment(text)
 
 
-def test_parse_comment_c_multi_text_after_end():
+def test_parse_comment_cpp_multi_text_after_end():
     """Raise CommentParseError when there is stuff after the comment
     delimiter.
     """
@@ -522,7 +539,7 @@ def test_parse_comment_c_multi_text_after_end():
     )
 
     with pytest.raises(CommentParseError):
-        CCommentStyle.parse_comment(text)
+        CppCommentStyle.parse_comment(text)
 
 
 def test_create_comment_html():
@@ -617,8 +634,8 @@ def test_comment_at_first_character_python_indented_comments():
     assert PythonCommentStyle.comment_at_first_character(text) == expected
 
 
-def test_comment_at_first_character_c_multi():
-    """Simple test for a multi-line C comment."""
+def test_comment_at_first_character_cpp_multi():
+    """Simple test for a multi-line C++ comment."""
     text = cleandoc(
         """
         /*
@@ -637,10 +654,10 @@ def test_comment_at_first_character_c_multi():
         """
     )
 
-    assert CCommentStyle.comment_at_first_character(text) == expected
+    assert CppCommentStyle.comment_at_first_character(text) == expected
 
 
-def test_comment_at_first_character_c_multi_never_ends():
+def test_comment_at_first_character_cpp_multi_never_ends():
     """Expect CommentParseError if the comment never ends."""
     text = cleandoc(
         """
@@ -652,4 +669,32 @@ def test_comment_at_first_character_c_multi_never_ends():
     )
 
     with pytest.raises(CommentParseError):
-        CCommentStyle.comment_at_first_character(text)
+        CppCommentStyle.comment_at_first_character(text)
+
+
+def test_parse_comment_lisp():
+    """Parse a simple Lisp comment."""
+    text = cleandoc(
+        """
+        ;; Hello
+        ;;
+        ;; world
+        """
+    )
+    expected = cleandoc(
+        """
+        Hello
+
+        world
+        """
+    )
+
+    assert LispCommentStyle.parse_comment(text) == expected
+
+
+def test_get_comment_style():
+    """Select the right style based on the filename"""
+    assert get_comment_style("foo.php") == CppCommentStyle
+    assert get_comment_style("foo.blade.php") == BladeCommentStyle
+    assert get_comment_style("foo.bar.blade.php") == CppCommentStyle
+    assert get_comment_style("foo.php.blade") is None

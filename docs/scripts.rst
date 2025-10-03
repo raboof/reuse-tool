@@ -1,5 +1,6 @@
 ..
   SPDX-FileCopyrightText: 2022 Nico Rikken <nico.rikken@fsfe.org>
+  SPDX-FileCopyrightText: 2025 Matthias Schoettle <opensource@mattsch.com>
 
   SPDX-License-Identifier: CC-BY-SA-4.0
 
@@ -55,6 +56,22 @@ This output is convenient for use in larger scripts.
 
   $ git log --reverse --date="format:%Y" --format="format:%cd" | head -n 1
   2017
+
+.. SPDX-SnippetEnd
+
+Year of first commit while following renames
+====================
+
+If you want to follow file renames in the Git history, you can use the `--follow` argument.
+This requires you to pass the file to `git log`.
+
+.. SPDX-SnippetBegin
+.. SPDX-Snippet-License-Identifier: CC0-1.0
+
+.. code-block:: console
+
+  $ git log --follow --date="format:%Y" --format="format:%cd" -- docs/scripts.rst | tail -n 1
+  2022
 
 .. SPDX-SnippetEnd
 
@@ -170,7 +187,7 @@ Add headers to staged files based on git settings
 
 This script helps you add your copyright headers right before committing the code you wrote.
 
-The list of files staged in git can be retrieved using ``git diff --name-only --cached``, which is the basis to apply the ``reuse addheader`` command to.
+The list of files staged in git can be retrieved using ``git diff --name-only --cached``, which is the basis to apply the ``reuse annotate`` command to.
 
 Git user and email address are available through ``git config --get user.name`` and ``git config --get user.email``.
 
@@ -183,7 +200,7 @@ These elements can be combined into a single command:
 
 .. code-block:: console
 
-  $ git diff --name-only --cached | xargs -I {} reuse addheader -c "$(git config --get user.name) <$(git config --get user.email)>" "{}"
+  $ git diff --name-only --cached | xargs -I {} reuse annotate -c "$(git config --get user.name) <$(git config --get user.email)>" "{}"
 
 .. SPDX-SnippetEnd
 

@@ -9,19 +9,31 @@ SPDX-License-Identifier: CC-BY-SA-4.0
 [![The latest version of reuse can be found on PyPI.](https://img.shields.io/pypi/v/reuse.svg)](https://pypi.python.org/pypi/reuse)
 [![Information on what versions of Python reuse supports can be found on PyPI.](https://img.shields.io/pypi/pyversions/reuse.svg)](https://pypi.python.org/pypi/reuse)
 [![REUSE status](https://api.reuse.software/badge/github.com/fsfe/reuse-tool)](https://api.reuse.software/info/github.com/fsfe/reuse-tool)
-[![readme style standard](https://img.shields.io/badge/readme_style-standard-brightgreen.svg)](https://github.com/RichardLitt/standard-readme)
+[![standard-readme compliant](https://img.shields.io/badge/readme%20style-standard-brightgreen.svg)](https://github.com/RichardLitt/standard-readme)
 [![Packaging status](https://repology.org/badge/tiny-repos/reuse.svg?header=in%20distro%20repos)](https://repology.org/project/reuse/versions)
+[![Translation status](https://hosted.weblate.org/widgets/fsfe/-/reuse-tool/svg-badge.svg)](https://hosted.weblate.org/projects/fsfe/reuse-tool/)
 
-> reuse is a tool for compliance with the [REUSE](https://reuse.software/)
-> recommendations.
+reuse is a tool for compliance with the [REUSE](https://reuse.software/)
+recommendations.
 
 - Documentation: <https://reuse.readthedocs.io> and <https://reuse.software>
 - Source code: <https://github.com/fsfe/reuse-tool>
 - PyPI: <https://pypi.python.org/pypi/reuse>
-- REUSE: 3.0
-- Python: 3.6+
+- REUSE: 3.3
+- Python: 3.10+
+
+## Table of contents
+
+- [Background](#background)
+- [Install](#install)
+- [Usage](#usage)
+- [Maintainers](#maintainers)
+- [Contributing](#contributing)
+- [Licensing](#licensing)
 
 ## Background
+
+<!-- REUSE-IgnoreStart -->
 
 Copyright and licensing is difficult, especially when reusing software from
 different projects that are released under various different licenses.
@@ -31,6 +43,8 @@ recommendations to make licensing your Free Software projects easier. Not only
 do these recommendations make it easier for you to declare the licenses under
 which your works are released, but they also make it easier for a computer to
 understand how your project is licensed.
+
+<!-- REUSE-IgnoreEnd -->
 
 As a short summary, the recommendations are threefold:
 
@@ -53,29 +67,12 @@ and licenses in software projects. The REUSE helper tool, on the other hand, is
 solely designed to be a simple tool to assist in compliance with the REUSE
 recommendations.
 
-## Example demo
-
-In this screencast, we are going to follow the
-[tutorial](https://reuse.software/tutorial), making the
-[REUSE example repository](https://github.com/fsfe/reuse-example/) compliant.
-
-![Demo of some basic REUSE tool commands](https://download.fsfe.org/videos/reuse/screencasts/reuse-tool.gif)
-
 ## Install
 
-### Installation via package managers (Recommended)
+### Installation via package manager (Recommended)
 
-There are packages available for easy install on some operating systems. You are
+There are packages available for easy install on many operating systems. You are
 welcome to help us package this tool for more distributions!
-
-- Arch Linux: [reuse](https://archlinux.org/packages/community/any/reuse/)
-- Debian: [reuse](https://packages.debian.org/search?keywords=reuse&exact=1)
-- GNU Guix: [reuse](https://guix.gnu.org/packages/reuse-0.14.0/)
-- Fedora: [reuse](https://apps.fedoraproject.org/packages/reuse)
-- NixOS:
-  [reuse](https://search.nixos.org/packages?channel=21.05&from=0&size=50&sort=relevance&type=packages&query=reuse)
-- openSUSE: [reuse](https://software.opensuse.org/package/reuse)
-- VoidLinux: [reuse](https://voidlinux.org/packages/?arch=x86_64&q=reuse)
 
 An automatically generated list can be found at
 [repology.org](https://repology.org/project/reuse/versions), without any
@@ -105,35 +102,40 @@ pipx install reuse
 reuse will then be available in `~/.local/bin`, which must be added to your
 `$PATH`.
 
-### Installation via pip
-
-To install reuse, you need to have the following pieces of software on your
-computer:
-
-- Python 3.6+
-- pip
-
-You then only need to run the following command:
-
-```bash
-pip3 install --user reuse
-```
-
 After this, make sure that `~/.local/bin` is in your `$PATH`. On Windows, the
 required path for your environment may look like
 `%USERPROFILE%\AppData\Roaming\Python\Python39\Scripts`, depending on the Python
 version you have installed.
 
-To update reuse, run this command:
+To upgrade reuse, run this command:
 
 ```bash
-pip3 install --user --upgrade reuse
+pipx upgrade reuse
 ```
 
 For full functionality, the following pieces of software are recommended:
 
 - Git
 - Mercurial 4.3+
+- Pijul
+- Jujutsu
+
+### Installation via pip
+
+To install reuse into `~/.local/bin`, run:
+
+```bash
+pip3 install --user reuse
+```
+
+Subsequently, make sure that `~/.local/bin` is in your `$PATH` like described in
+the previous section.
+
+To upgrade reuse, run this command:
+
+```bash
+pip3 install --user --upgrade reuse
+```
 
 ### Installation from source
 
@@ -142,13 +144,15 @@ methods above for easier and more stable updates. Please make sure the
 requirements for the installation via pip are present on your machine.
 
 ```bash
-python3 setup.py install
+pip install .
 ```
 
 ## Usage
 
 First, read the [REUSE tutorial](https://reuse.software/tutorial/). In a
 nutshell:
+
+<!-- REUSE-IgnoreStart -->
 
 1. Put your licenses in the `LICENSES/` directory.
 2. Add a comment header to each file that says
@@ -165,30 +169,38 @@ Example of header:
 # SPDX-License-Identifier: CC-BY-SA-4.0
 ```
 
+<!-- REUSE-IgnoreEnd -->
+
+### CLI
+
 To check against the recommendations, use `reuse lint`:
 
 ```
 ~/Projects/reuse-tool $ reuse lint
 [...]
 
-Congratulations! Your project is compliant with version 3.0 of the REUSE Specification :-)
+Congratulations! Your project is compliant with version 3.3 of the REUSE Specification :-)
 ```
 
 This tool can do various more things, detailed in the documentation. Here a
 short summary:
 
-- `addheader` --- Add copyright and/or licensing information to the header of a
+- `annotate` --- Add copyright and/or licensing information to the header of a
   file.
-
 - `download` --- Download the specified license into the `LICENSES/` directory.
-
-- `init` --- Set up the project for REUSE compliance.
-
 - `lint` --- Verify the project for REUSE compliance.
-
+- `lint-file` --- Verify REUSE compliance of individual files.
 - `spdx` --- Generate an SPDX Document of all files in the project.
-
 - `supported-licenses` --- Prints all licenses supported by REUSE.
+- `convert-dep5` --- Convert .reuse/dep5 to REUSE.toml.
+
+### Example demo
+
+In this screencast, we are going to follow the
+[tutorial](https://reuse.software/tutorial), making the
+[REUSE example repository](https://github.com/fsfe/reuse-example/) compliant.
+
+![Demo of some basic REUSE tool commands](https://download.fsfe.org/videos/reuse/screencasts/reuse-tool.gif)
 
 ### Run in Docker
 
@@ -215,14 +227,16 @@ You can also provide additional arguments, like so:
 docker run --rm --volume $(pwd):/data fsfe/reuse --include-submodules spdx -o out.spdx
 ```
 
-There are a number of tags available:
+The available tags are:
 
-- `latest` is the most recent stable release.
-- `dev` follows the `master` branch of this repository. Up-to-date, but
-  potentially unstable.
-- `latest-extra` has a few extra packages installed, currently `openssh-client`.
-- `latest-debian` is based on `python:slim`. It is larger, but may be better
-  suited for license compliance.
+- `latest` --- the most recent release of reuse.
+- `{major}` --- the latest major release.
+- `{major}.{minor}` --- the latest minor release.
+- `{major}.{minor}.{patch}` --- a precise release.
+
+You can add `-debian` to any of the tags to get a Debian-based instead of an
+Alpine-based image, which is larger, but may be better suited for license
+compliance.
 
 ### Run as pre-commit hook
 
@@ -234,7 +248,7 @@ Git. This uses [pre-commit](https://pre-commit.com/). Once you
 ```yaml
 repos:
   - repo: https://github.com/fsfe/reuse-tool
-    rev: latest
+    rev: v5.1.1
     hooks:
       - id: reuse
 ```
@@ -243,44 +257,72 @@ Then run `pre-commit install`. Now, every time you commit, `reuse lint` is run
 in the background, and will prevent your commit from going through if there was
 an error.
 
-## Maintainers
+If you instead want to only lint files that were changed in your commit, you can
+use the following configuration:
 
-- Carmen Bianca Bakker - <carmenbianca@fsfe.org>
-- Max Mehl - <max.mehl@fsfe.org>
-
-## Contribute
-
-Any pull requests or suggestions are welcome at
-<https://github.com/fsfe/reuse-tool> or via e-mail to one of the maintainers.
-General inquiries can be sent to <reuse@lists.fsfe.org>.
-
-Interaction within this project is covered by the
-[FSFE's Code of Conduct](https://fsfe.org/about/codeofconduct).
-
-Starting local development is very simple, just execute the following commands:
-
-```bash
-git clone git@github.com:fsfe/reuse-tool.git
-cd reuse-tool/
-python3 -mvenv venv
-source venv/bin/activate
-make develop
+```yaml
+repos:
+  - repo: https://github.com/fsfe/reuse-tool
+    rev: v5.1.1
+    hooks:
+      - id: reuse-lint-file
 ```
 
-You need to run `make develop` at least once to set up the virtualenv.
+### Shell completion
 
-Next, run `make help` to see the available interactions.
+In order to enable shell completion, you need to generate the shell completion
+script. You do this with `_REUSE_COMPLETE=bash_source reuse`. Replace `bash`
+with `zsh` or `fish` as needed, or any other shells supported by the Python
+`click` library. You can then source the output in your shell rc file, like so
+(e.g.`~/.bashrc`):
 
-## License
+```bash
+eval "$(_REUSE__COMPLETE=bash_source reuse)"
+```
+
+Alternatively, you can place the generated completion script in
+`${XDG_DATA_HOME}/bash-completion/completions/reuse`.
+
+## Maintainers
+
+- Carmen Bianca Bakker <carmenbianca@fsfe.org>
+- Florian Snow <floriansnow@fsfe.org>
+
+### Former maintainers
+
+- Max Mehl <max.mehl@fsfe.org>
+- Linus Sehn <linus@fsfe.org>
+
+## Contributing
+
+If you're interested in contributing to the reuse project, there are several
+ways to get involved. Development of the project takes place on GitHub at
+<https://github.com/fsfe/reuse-tool>. There, you can submit bug reports, feature
+requests, and pull requests. Even and especially when in doubt, feel free to
+open an issue with a question. Contributions of all types are welcome, and the
+development team is happy to provide guidance and support for new contributors.
+
+You should exercise some caution when opening a pull request to make changes
+which were not (yet) acknowledged by the team as pertinent. Such pull requests
+may be closed, leading to disappointment. To avoid this, please open an issue
+first.
+
+Additionally, the <reuse@lists.fsfe.org> mailing list is available for
+discussion and support related to the project.
+
+You can find the full contribution guidelines at
+<https://reuse.readthedocs.io/en/latest/contribute.html>.
+
+## Licensing
 
 This work is licensed under multiple licences. Because keeping this section
-up-to-date is challenging, here is a brief summary as of April 2020:
+up-to-date is challenging, here is a brief summary as of April 2024:
 
 - All original source code is licensed under GPL-3.0-or-later.
 - All documentation is licensed under CC-BY-SA-4.0.
 - Some configuration and data files are licensed under CC0-1.0.
 - Some code borrowed from
-  [spdx/tool-python](https://github.com/spdx/tools-python) is licensed under
+  [spdx/tools-python](https://github.com/spdx/tools-python) is licensed under
   Apache-2.0.
 
 For more accurate information, check the individual files.

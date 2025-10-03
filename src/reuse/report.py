@@ -1,43 +1,105 @@
 # SPDX-FileCopyrightText: 2017 Free Software Foundation Europe e.V. <https://fsfe.org>
 # SPDX-FileCopyrightText: 2022 Florian Snow <florian@familysnow.net>
+# SPDX-FileCopyrightText: 2022 Pietro Albini <pietro.albini@ferrous-systems.com>
+# SPDX-FileCopyrightText: 2023 DB Systel GmbH
+# SPDX-FileCopyrightText: 2023 Carmen Bianca BAKKER <carmenbianca@fsfe.org>
+# SPDX-FileCopyrightText: 2024 Kerry McAdams <github@klmcadams>
+# SPDX-FileCopyrightText: 2024 Sebastien Morais <github@SMoraisAnsys>
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Module that contains reports about files and projects for linting."""
 
+import bdb
+import contextlib
 import datetime
 import logging
-import multiprocessing as mp
 import random
-from gettext import gettext as _
+from collections.abc import Collection, Generator
+from concurrent.futures import ProcessPoolExecutor
 from hashlib import md5
 from io import StringIO
-from os import PathLike, cpu_count
-from pathlib import Path
-from typing import Iterable, List, NamedTuple, Optional, Set
+from os import cpu_count
+from pathlib import Path, PurePath
+from typing import Any, Final, NamedTuple, Optional, Protocol, cast
 from uuid import uuid4
 
-from . import __version__
-from ._util import _LICENSING, _checksum
-from .project import Project
+from . import _LICENSING, __REUSE_version__, __version__
+from ._util import (
+    _add_plus_to_identifier,
+    _checksum,
+    _strip_plus_from_identifier,
+)
+from .extract import _LICENSEREF_PATTERN
+from .global_licensing import ReuseDep5
+from .i18n import _
+from .project import Project, ReuseInfo
+from .types import StrPath
 
 _LOGGER = logging.getLogger(__name__)
+
+LINT_VERSION = "1.0"
+
+_CPU_COUNT: Final[int] = cpu_count() or 1
+#: This variable exists to be able to override parallelisation. If set to
+#: :const:`False`, generating :method:`FileReport.generate` will not use
+#: parallelisation.
+ENABLE_PARALLEL = True
 
 
 class _MultiprocessingContainer:
     """Container that remembers some data in order to generate a FileReport."""
 
-    def __init__(self, project, do_checksum):
-        self.project = project
-        self.do_checksum = do_checksum
+    def __init__(
+        self, project: Project, do_checksum: bool, add_license_concluded: bool
+    ):
+        if isinstance(project.global_licensing, ReuseDep5):
+            # Remember that a dep5_copyright was (or was not) set prior.
+            self.has_dep5 = bool(project.global_licensing)
+            # TODO: We create a copy of the project in the following
+            # song-and-dance because the debian Copyright object cannot be
+            # pickled.
+            new_project = Project(
+                project.root,
+                vcs_strategy=project.vcs_strategy,
+                license_map=project.license_map,
+                licenses=project.licenses.copy(),
+                # TODO: adjust this method/class to account for REUSE.toml as
+                # well. Unset dep5_copyright
+                global_licensing=None,
+                include_submodules=project.include_submodules,
+                include_meson_subprojects=project.include_meson_subprojects,
+            )
+            new_project.licenses_without_extension = (
+                project.licenses_without_extension
+            )
+            self.project = new_project
+        else:
+            self.has_dep5 = False
+            self.project = project
 
-    def __call__(self, file_):
+        self.reuse_dep5: ReuseDep5 | None = None
+        self.do_checksum = do_checksum
+        self.add_license_concluded = add_license_concluded
+
+    def __call__(self, file_: StrPath) -> "_MultiprocessingResult":
+        # By remembering that we've parsed the .reuse/dep5, we only parse it
+        # once (the first time) inside of each process.
+        if self.has_dep5 and not self.reuse_dep5:
+            with contextlib.suppress(Exception):
+                self.reuse_dep5 = ReuseDep5.from_file(
+                    self.project.root / ".reuse/dep5"
+                )
+                self.project.global_licensing = self.reuse_dep5
         # pylint: disable=broad-except
         try:
             return _MultiprocessingResult(
                 file_,
                 FileReport.generate(
-                    self.project, file_, do_checksum=self.do_checksum
+                    self.project,
+                    file_,
+                    do_checksum=self.do_checksum,
+                    add_license_concluded=self.add_license_concluded,
                 ),
                 None,
             )
@@ -48,57 +110,186 @@ class _MultiprocessingContainer:
 class _MultiprocessingResult(NamedTuple):
     """Result of :class:`MultiprocessingContainer`."""
 
-    path: PathLike
+    path: StrPath
     report: Optional["FileReport"]
-    error: Optional[Exception]
+    error: Exception | None
+
+
+def _generate_file_reports(
+    project: Project,
+    do_checksum: bool = True,
+    subset_files: Collection[StrPath] | None = None,
+    multiprocessing: bool = _CPU_COUNT > 1,
+    add_license_concluded: bool = False,
+) -> Generator[_MultiprocessingResult, None, None]:
+    """Create a :class:`FileReport` for every file in the project, filtered
+    by *subset_files*.
+    """
+    container = _MultiprocessingContainer(
+        project, do_checksum, add_license_concluded
+    )
+
+    files = (
+        project.subset_files(subset_files)
+        if subset_files is not None
+        else project.all_files()
+    )
+    if multiprocessing and ENABLE_PARALLEL:
+        files_set = frozenset(files)
+        with ProcessPoolExecutor() as executor:
+            yield from executor.map(
+                container,
+                files_set,
+                chunksize=max(1, int(len(files_set) / _CPU_COUNT / 4)),
+            )
+    else:
+        yield from map(container, files)
+
+
+def _process_error(error: Exception, path: StrPath) -> None:
+    # Facilitate better debugging by being able to quit the program.
+    if isinstance(error, (bdb.BdbQuit, KeyboardInterrupt)):
+        raise error
+    if isinstance(error, (OSError, UnicodeError)):
+        _LOGGER.error(
+            _("Could not read '{path}'").format(path=path),
+            exc_info=error,
+        )
+    else:
+        _LOGGER.error(
+            _("Unexpected error occurred while parsing '{path}'").format(
+                path=path
+            ),
+            exc_info=error,
+        )
+
+
+class ProjectReportSubsetProtocol(Protocol):
+    """A :class:`Protocol` that defines a subset of functionality of
+    :class:`ProjectReport`, implemented by :class:`ProjectSubsetReport`.
+    """
+
+    path: StrPath
+    missing_licenses: dict[str, set[Path]]
+    read_errors: set[Path]
+    file_reports: set["FileReport"]
+
+    @property
+    def files_without_licenses(self) -> set[Path]:
+        """Set of paths that have no licensing information."""
+
+    @property
+    def files_without_copyright(self) -> set[Path]:
+        """Set of paths that have no copyright information."""
+
+    @property
+    def is_compliant(self) -> bool:
+        """Whether the report subset is compliant with the REUSE Spec."""
 
 
 class ProjectReport:  # pylint: disable=too-many-instance-attributes
     """Object that holds linting report about the project."""
 
     def __init__(self, do_checksum: bool = True):
-        self.path = None
-        self.licenses = {}
-        self.missing_licenses = {}
-        self.bad_licenses = {}
-        self.deprecated_licenses = set()
-        self.read_errors = set()
-        self.file_reports = set()
-        self.licenses_without_extension = {}
+        self.path: StrPath = ""
+        self.licenses: dict[str, Path] = {}
+        self.missing_licenses: dict[str, set[Path]] = {}
+        self.bad_licenses: dict[str, set[Path]] = {}
+        self.deprecated_licenses: set[str] = set()
+        self.read_errors: set[Path] = set()
+        self.file_reports: set[FileReport] = set()
+        self.licenses_without_extension: dict[str, Path] = {}
 
         self.do_checksum = do_checksum
 
-        self._unused_licenses = None
-        self._used_licenses = None
-        self._files_without_licenses = None
-        self._files_without_copyright = None
+        self._unused_licenses: set[str] | None = None
+        self._used_licenses: set[str] | None = None
+        self._files_without_licenses: set[Path] | None = None
+        self._files_without_copyright: set[Path] | None = None
+        self._is_compliant: bool | None = None
 
-    def to_dict(self):
-        """Turn the report into a json-like dictionary."""
-        return {
-            "path": str(Path(self.path).resolve()),
-            "licenses": {
-                identifier: str(path)
-                for identifier, path in self.licenses.items()
+    def to_dict_lint(self) -> dict[str, Any]:
+        """Collects and formats data relevant to linting from report and returns
+        it as a dictionary.
+
+        Returns:
+            Dictionary containing data from the ProjectReport object.
+        """
+        # Setup report data container
+        data: dict[str, Any] = {
+            "non_compliant": {
+                "missing_licenses": self.missing_licenses,
+                "unused_licenses": [str(file) for file in self.unused_licenses],
+                "deprecated_licenses": [
+                    str(file) for file in self.deprecated_licenses
+                ],
+                "bad_licenses": self.bad_licenses,
+                "licenses_without_extension": self.licenses_without_extension,
+                "missing_copyright_info": [
+                    str(file) for file in self.files_without_copyright
+                ],
+                "missing_licensing_info": [
+                    str(file) for file in self.files_without_licenses
+                ],
+                "read_errors": [str(file) for file in self.read_errors],
             },
-            "bad_licenses": {
-                lic: [str(file_) for file_ in files]
-                for lic, files in self.bad_licenses.items()
+            "files": [],
+            "summary": {
+                "used_licenses": [],
             },
-            "deprecated_licenses": sorted(self.deprecated_licenses),
-            "licenses_without_extension": {
-                identifier: str(path)
-                for identifier, path in self.licenses_without_extension.items()
-            },
-            "missing_licenses": {
-                lic: [str(file_) for file_ in files]
-                for lic, files in self.missing_licenses.items()
-            },
-            "read_errors": list(map(str, self.read_errors)),
-            "file_reports": [report.to_dict() for report in self.file_reports],
+            "recommendations": self.recommendations,
         }
 
-    def bill_of_materials(self) -> str:
+        # Populate 'files'
+        for file_report in self.file_reports:
+            data["files"].append(file_report.to_dict_lint())
+
+        # Populate 'summary'
+        number_of_files = len(self.file_reports)
+        data["summary"] = {
+            "used_licenses": list(self.used_licenses),
+            "files_total": number_of_files,
+            "files_with_copyright_info": number_of_files
+            - len(self.files_without_copyright),
+            "files_with_licensing_info": number_of_files
+            - len(self.files_without_licenses),
+            "compliant": self.is_compliant,
+        }
+
+        # Add the top three keys
+        unsorted_data = {
+            "lint_version": LINT_VERSION,
+            "reuse_spec_version": __REUSE_version__,
+            "reuse_tool_version": __version__,
+            **data,
+        }
+
+        # Sort dictionary keys while keeping the top three keys at the beginning
+        # and the recommendations on the bottom
+        sorted_keys = sorted(list(unsorted_data.keys()))
+        sorted_keys.remove("lint_version")
+        sorted_keys.remove("reuse_spec_version")
+        sorted_keys.remove("reuse_tool_version")
+        sorted_keys.remove("recommendations")
+        sorted_keys = (
+            [
+                "lint_version",
+                "reuse_spec_version",
+                "reuse_tool_version",
+            ]
+            + sorted_keys
+            + ["recommendations"]
+        )
+
+        sorted_data = {key: unsorted_data[key] for key in sorted_keys}
+
+        return sorted_data
+
+    def bill_of_materials(
+        self,
+        creator_person: str | None = None,
+        creator_organization: str | None = None,
+    ) -> str:
         """Generate a bill of materials from the project.
 
         See https://spdx.org/specifications.
@@ -113,55 +304,51 @@ class ProjectReport:  # pylint: disable=too-many-instance-attributes
         # TODO: Generate UUID from git revision maybe
         # TODO: Fix the URL
         out.write(
-            f"DocumentNamespace:"
-            f" http://spdx.org/spdxdocs/spdx-v2.1-{uuid4()}\n"
+            f"DocumentNamespace: http://spdx.org/spdxdocs/spdx-v2.1-{uuid4()}\n"
         )
 
         # Author
-        # TODO: Fix Person and Organization
-        out.write("Creator: Person: Anonymous ()\n")
-        out.write("Creator: Organization: Anonymous ()\n")
+        out.write(f"Creator: Person: {format_creator(creator_person)}\n")
+        out.write(
+            f"Creator: Organization: {format_creator(creator_organization)}\n"
+        )
         out.write(f"Creator: Tool: reuse-{__version__}\n")
 
-        now = datetime.datetime.utcnow()
-        now = now.replace(microsecond=0)
-        out.write(f"Created: {now.isoformat()}Z\n")
+        now = datetime.datetime.now(tz=datetime.timezone.utc)
+        out.write(f"Created: {now.strftime('%Y-%m-%dT%H:%M:%SZ')}\n")
         out.write(
             "CreatorComment: <text>This document was created automatically"
             " using available reuse information consistent with"
             " REUSE.</text>\n"
         )
 
-        reports = sorted(self.file_reports, key=lambda x: x.spdxfile.name)
+        reports = sorted(self.file_reports, key=lambda x: x.name)
 
         for report in reports:
             out.write(
-                f"Relationship: SPDXRef-DOCUMENT describes"
-                f" {report.spdxfile.spdx_id}\n"
+                "Relationship: SPDXRef-DOCUMENT DESCRIBES"
+                f" {report.spdx_id}\n"
             )
 
         for report in reports:
             out.write("\n")
-            out.write(f"FileName: {report.spdxfile.name}\n")
-            out.write(f"SPDXID: {report.spdxfile.spdx_id}\n")
-            out.write(f"FileChecksum: SHA1: {report.spdxfile.chk_sum}\n")
-            # IMPORTANT: Make no assertion about concluded license. This tool
-            # cannot, with full certainty, determine the license of a file.
-            out.write("LicenseConcluded: NOASSERTION\n")
+            out.write(f"FileName: {report.name}\n")
+            out.write(f"SPDXID: {report.spdx_id}\n")
+            out.write(f"FileChecksum: SHA1: {report.chk_sum}\n")
+            out.write(f"LicenseConcluded: {report.license_concluded}\n")
 
-            for lic in sorted(report.spdxfile.licenses_in_file):
+            for lic in sorted(report.licenses_in_file):
                 out.write(f"LicenseInfoInFile: {lic}\n")
-            if report.spdxfile.copyright:
+            if report.copyright:
                 out.write(
-                    f"FileCopyrightText:"
-                    f" <text>{report.spdxfile.copyright}</text>\n"
+                    "FileCopyrightText:" f" <text>{report.copyright}</text>\n"
                 )
             else:
                 out.write("FileCopyrightText: NONE\n")
 
         # Licenses
         for lic, path in sorted(self.licenses.items()):
-            if lic.startswith("LicenseRef-"):
+            if _LICENSEREF_PATTERN.match(lic):
                 out.write("\n")
                 out.write(f"LicenseID: {lic}\n")
                 out.write("LicenseName: NOASSERTION\n")
@@ -176,9 +363,19 @@ class ProjectReport:  # pylint: disable=too-many-instance-attributes
         cls,
         project: Project,
         do_checksum: bool = True,
-        multiprocessing: bool = cpu_count() > 1,
+        multiprocessing: bool = cpu_count() > 1,  # type: ignore
+        add_license_concluded: bool = False,
     ) -> "ProjectReport":
-        """Generate a ProjectReport from a Project."""
+        """Generate a :class:`ProjectReport` from a :class:`Project`.
+
+        Args:
+            project: The :class:`Project` to lint.
+            do_checksum: Generate a checksum of every file. If this is
+                :const:`False`, generate a random checksum for every file.
+            multiprocessing: Whether to use multiprocessing.
+            add_license_concluded: Whether to aggregate all found SPDX
+                expressions into a concluded license.
+        """
         project_report = cls(do_checksum=do_checksum)
         project_report.path = project.root
         project_report.licenses = project.licenses
@@ -186,42 +383,30 @@ class ProjectReport:  # pylint: disable=too-many-instance-attributes
             project.licenses_without_extension
         )
 
-        container = _MultiprocessingContainer(project, do_checksum)
-
-        if multiprocessing:
-            with mp.Pool() as pool:
-                results = pool.map(container, project.all_files())
-            pool.join()
-        else:
-            results = map(container, project.all_files())
-
+        results = _generate_file_reports(
+            project,
+            do_checksum=do_checksum,
+            multiprocessing=multiprocessing,
+            add_license_concluded=add_license_concluded,
+        )
         for result in results:
             if result.error:
-                if isinstance(result.error, (OSError, UnicodeError)):
-                    _LOGGER.error(
-                        _("Could not read '{path}'").format(path=result.path),
-                        exc_info=result.error,
-                    )
-                    project_report.read_errors.add(result.path)
-                    continue
-                _LOGGER.error(
-                    _(
-                        "Unexpected error occurred while parsing '{path}'"
-                    ).format(path=result.path),
-                    exc_info=result.error,
-                )
-                project_report.read_errors.add(result.path)
+                _process_error(result.error, result.path)
+                project_report.read_errors.add(Path(result.path))
                 continue
-            file_report = result.report
+
+            file_report = cast(FileReport, result.report)
 
             # File report.
             project_report.file_reports.add(file_report)
 
-            # Bad and missing licenses.
+            # Missing licenses.
             for missing_license in file_report.missing_licenses:
                 project_report.missing_licenses.setdefault(
                     missing_license, set()
                 ).add(file_report.path)
+
+            # Bad licenses
             for bad_license in file_report.bad_licenses:
                 project_report.bad_licenses.setdefault(bad_license, set()).add(
                     file_report.path
@@ -237,7 +422,7 @@ class ProjectReport:  # pylint: disable=too-many-instance-attributes
         return project_report
 
     @property
-    def used_licenses(self) -> Set[str]:
+    def used_licenses(self) -> set[str]:
         """Set of license identifiers that are found in file reports."""
         if self._used_licenses is not None:
             return self._used_licenses
@@ -245,99 +430,299 @@ class ProjectReport:  # pylint: disable=too-many-instance-attributes
         self._used_licenses = {
             lic
             for file_report in self.file_reports
-            for lic in file_report.spdxfile.licenses_in_file
+            for lic in file_report.licenses_in_file
         }
         return self._used_licenses
 
     @property
-    def unused_licenses(self) -> Set[str]:
+    def unused_licenses(self) -> set[str]:
         """Set of license identifiers that are not found in any file report."""
         if self._unused_licenses is not None:
             return self._unused_licenses
 
-        # First collect licenses that are suspected to be unused.
-        suspected_unused_licenses = {
-            lic for lic in self.licenses if lic not in self.used_licenses
-        }
-        # Remove false positives.
         self._unused_licenses = {
             lic
-            for lic in suspected_unused_licenses
-            if f"{lic}+" not in self.used_licenses
+            for lic in self.licenses
+            if not any(
+                identifier in self.used_licenses
+                for identifier in (lic, _add_plus_to_identifier(lic))
+            )
         }
         return self._unused_licenses
 
     @property
-    def files_without_licenses(self) -> Iterable[PathLike]:
-        """Iterable of paths that have no license information."""
+    def files_without_licenses(self) -> set[Path]:
+        """Set of paths that have no licensing information."""
         if self._files_without_licenses is not None:
             return self._files_without_licenses
 
         self._files_without_licenses = {
             file_report.path
             for file_report in self.file_reports
-            if not file_report.spdxfile.licenses_in_file
+            if not file_report.licenses_in_file
         }
 
         return self._files_without_licenses
 
     @property
-    def files_without_copyright(self) -> Iterable[PathLike]:
-        """Iterable of paths that have no copyright information."""
+    def files_without_copyright(self) -> set[Path]:
+        """Set of paths that have no copyright information."""
         if self._files_without_copyright is not None:
             return self._files_without_copyright
 
         self._files_without_copyright = {
             file_report.path
             for file_report in self.file_reports
-            if not file_report.spdxfile.copyright
+            if not file_report.copyright
         }
 
         return self._files_without_copyright
 
+    @property
+    def is_compliant(self) -> bool:
+        """Whether the report is compliant with the REUSE Spec."""
+        if self._is_compliant is not None:
+            return self._is_compliant
 
-class _File:  # pylint: disable=too-few-public-methods
-    """Represent an SPDX file. Sufficiently enough for our purposes, in any
-    case.
+        self._is_compliant = not any(
+            (
+                self.missing_licenses,
+                self.unused_licenses,
+                self.bad_licenses,
+                self.deprecated_licenses,
+                self.licenses_without_extension,
+                self.files_without_copyright,
+                self.files_without_licenses,
+                self.read_errors,
+            )
+        )
+
+        return self._is_compliant
+
+    @property
+    def recommendations(self) -> list[str]:
+        """Generate help for next steps based on found REUSE issues"""
+        recommendations = []
+
+        # These items should be ordered in the same way as in the summary.
+        if self.bad_licenses:
+            recommendations.append(
+                _(
+                    "Fix bad licenses: At least one license in the LICENSES"
+                    " directory and/or provided by 'SPDX-License-Identifier'"
+                    " tags is invalid. They are either not valid SPDX License"
+                    " Identifiers or do not start with 'LicenseRef-'. FAQ about"
+                    " custom licenses:"
+                    " https://reuse.software/faq/#custom-license"
+                )
+            )
+        if self.deprecated_licenses:
+            recommendations.append(
+                _(
+                    "Fix deprecated licenses: At least one of the licenses in"
+                    " the LICENSES directory and/or provided by an"
+                    " 'SPDX-License-Identifier' tag or in '.reuse/dep5' has"
+                    " been deprecated by SPDX. The current list and their"
+                    " respective recommended  new identifiers can be found"
+                    " here: <https://spdx.org/licenses/#deprecated>"
+                )
+            )
+        if self.licenses_without_extension:
+            recommendations.append(
+                _(
+                    "Fix licenses without file extension: At least one license"
+                    " text file in the 'LICENSES' directory does not have a"
+                    " '.txt' file extension. Please rename the file(s)"
+                    " accordingly."
+                )
+            )
+        if self.missing_licenses:
+            recommendations.append(
+                _(
+                    "Fix missing licenses: For at least one of the license"
+                    " identifiers provided by the 'SPDX-License-Identifier'"
+                    " tags, there is no corresponding license text file in the"
+                    " 'LICENSES' directory. For SPDX license identifiers, you"
+                    " can simply run 'reuse download --all' to get any missing"
+                    " ones. For custom licenses (starting with 'LicenseRef-'),"
+                    " you need to add these files yourself."
+                )
+            )
+        if self.unused_licenses:
+            recommendations.append(
+                _(
+                    "Fix unused licenses: At least one of the license text"
+                    " files in 'LICENSES' is not referenced by any file, e.g."
+                    " by an 'SPDX-License-Identifier' tag. Please make sure"
+                    " that you either tag the accordingly licensed files"
+                    " properly, or delete the unused license text if you are"
+                    " sure that no file or code snippet is licensed as such."
+                )
+            )
+        if self.read_errors:
+            recommendations.append(
+                _(
+                    "Fix read errors: At least one of the files in your"
+                    " directory cannot be read by the tool. Please check the"
+                    " file permissions. You will find the affected files at the"
+                    " top of the output as part of the logged error messages."
+                )
+            )
+        if self.files_without_copyright or self.files_without_licenses:
+            recommendations.append(
+                _(
+                    "Fix missing copyright/licensing information: For one or"
+                    " more files, the tool cannot find copyright and/or"
+                    " licensing information. You typically do this by adding"
+                    " 'SPDX-FileCopyrightText' and 'SPDX-License-Identifier'"
+                    " tags to each file. The tutorial explains additional ways"
+                    " to do this: <https://reuse.software/tutorial/>"
+                )
+            )
+
+        return recommendations
+
+
+class ProjectSubsetReport:
+    """Like a :class:`ProjectReport`, but for a subset of the files using a
+    subset of features.
     """
 
-    def __init__(self, name, spdx_id=None, chk_sum=None):
-        self.name: str = name
-        self.spdx_id: str = spdx_id
-        self.chk_sum: str = chk_sum
-        self.licenses_in_file: List[str] = []
-        self.copyright: str = None
+    def __init__(self) -> None:
+        self.path: StrPath = ""
+        self.missing_licenses: dict[str, set[Path]] = {}
+        self.read_errors: set[Path] = set()
+        self.file_reports: set[FileReport] = set()
+
+    @classmethod
+    def generate(
+        cls,
+        project: Project,
+        subset_files: Collection[StrPath],
+        multiprocessing: bool = cpu_count() > 1,  # type: ignore
+    ) -> "ProjectSubsetReport":
+        """Generate a :class:`ProjectSubsetReport` from a :class:`Project`.
+
+        Args:
+            project: The :class:`Project` to lint.
+            subset_files: Only lint the files in this list.
+            multiprocessing: Whether to use multiprocessing.
+        """
+        subset_report = cls()
+        subset_report.path = project.root
+        results = _generate_file_reports(
+            project,
+            do_checksum=False,
+            subset_files=subset_files,
+            multiprocessing=multiprocessing,
+            add_license_concluded=False,
+        )
+        for result in results:
+            if result.error:
+                _process_error(result.error, result.path)
+                subset_report.read_errors.add(Path(result.path))
+                continue
+
+            file_report = cast(FileReport, result.report)
+            subset_report.file_reports.add(file_report)
+
+            for missing_license in file_report.missing_licenses:
+                subset_report.missing_licenses.setdefault(
+                    missing_license, set()
+                ).add(file_report.path)
+        return subset_report
+
+    @property
+    def files_without_licenses(self) -> set[Path]:
+        """Set of paths that have no licensing information."""
+        return {
+            file_report.path
+            for file_report in self.file_reports
+            if not file_report.licenses_in_file
+        }
+
+    @property
+    def files_without_copyright(self) -> set[Path]:
+        """Set of paths that have no copyright information."""
+        return {
+            file_report.path
+            for file_report in self.file_reports
+            if not file_report.copyright
+        }
+
+    @property
+    def is_compliant(self) -> bool:
+        """Whether the report subset is compliant with the REUSE Spec."""
+        return not any(
+            (
+                self.missing_licenses,
+                self.files_without_copyright,
+                self.files_without_licenses,
+                self.read_errors,
+            )
+        )
 
 
-class FileReport:
-    """Object that holds a linting report about a single file. Importantly,
-    it also contains SPDX File information in :attr:`spdxfile`.
-    """
+class FileReport:  # pylint: disable=too-many-instance-attributes
+    """Object that holds a linting report about a single file."""
 
-    def __init__(
-        self, name: PathLike, path: PathLike, do_checksum: bool = True
-    ):
-        self.spdxfile = _File(name)
+    def __init__(self, name: str, path: StrPath, do_checksum: bool = True):
+        self.name = name
         self.path = Path(path)
         self.do_checksum = do_checksum
 
-        self.bad_licenses = set()
-        self.missing_licenses = set()
+        self.reuse_infos: list[ReuseInfo] = []
 
-    def to_dict(self):
-        """Turn the report into a json-like dictionary."""
+        self.spdx_id: str | None = None
+        self.chk_sum: str | None = None
+        self.licenses_in_file: list[str] = []
+        self.license_concluded: str = ""
+        self.copyright: str = ""
+
+        self.bad_licenses: set[str] = set()
+        self.missing_licenses: set[str] = set()
+
+    def to_dict_lint(self) -> dict[str, Any]:
+        """Turn the report into a json-like dictionary with exclusively
+        information relevant for linting.
+        """
         return {
-            "path": str(Path(self.path).resolve()),
-            "name": self.spdxfile.name,
-            "spdx_id": self.spdxfile.spdx_id,
-            "chk_sum": self.spdxfile.chk_sum,
-            "licenses_in_file": sorted(self.spdxfile.licenses_in_file),
-            "copyright": self.spdxfile.copyright,
+            "path": PurePath(self.name).as_posix(),
+            "copyrights": [
+                {
+                    "value": str(line),
+                    "source": reuse_info.source_path,
+                    "source_type": (
+                        reuse_info.source_type.value
+                        if reuse_info.source_type
+                        else None
+                    ),
+                }
+                for reuse_info in self.reuse_infos
+                for line in reuse_info.copyright_notices
+            ],
+            "spdx_expressions": [
+                {
+                    "value": str(expression),
+                    "source": reuse_info.source_path,
+                    "source_type": (
+                        reuse_info.source_type.value
+                        if reuse_info.source_type
+                        else None
+                    ),
+                }
+                for reuse_info in self.reuse_infos
+                for expression in reuse_info.spdx_expressions
+            ],
         }
 
     @classmethod
     def generate(
-        cls, project: Project, path: PathLike, do_checksum: bool = True
+        cls,
+        project: Project,
+        path: StrPath,
+        do_checksum: bool = True,
+        add_license_concluded: bool = False,
     ) -> "FileReport":
         """Generate a FileReport from a path in a Project."""
         path = Path(path)
@@ -345,45 +730,91 @@ class FileReport:
             raise OSError(f"{path} is not a file")
 
         relative = project.relative_from_root(path)
-        report = cls("./" + str(relative), path, do_checksum=do_checksum)
+        report = cls(f"./{relative}", path, do_checksum=do_checksum)
 
         # Checksum and ID
         if report.do_checksum:
-            report.spdxfile.chk_sum = _checksum(path)
+            report.chk_sum = _checksum(path)
         else:
             # This path avoids a lot of heavy computation, which is handy for
             # scenarios where you only need a unique hash, not a consistent
             # hash.
-            report.spdxfile.chk_sum = f"{random.getrandbits(160):040x}"
+            report.chk_sum = f"{random.getrandbits(160):040x}"
         spdx_id = md5()
-        spdx_id.update(str(relative).encode("utf-8"))
-        spdx_id.update(report.spdxfile.chk_sum.encode("utf-8"))
-        report.spdxfile.spdx_id = f"SPDXRef-{spdx_id.hexdigest()}"
+        spdx_id.update(report.name.encode("utf-8"))
+        spdx_id.update(report.chk_sum.encode("utf-8"))
+        report.spdx_id = f"SPDXRef-{spdx_id.hexdigest()}"
 
-        spdx_info = project.spdx_info_of(path)
-        for expression in spdx_info.spdx_expressions:
-            for identifier in _LICENSING.license_keys(expression):
-                # A license expression akin to Apache-1.0+ should register
-                # correctly if LICENSES/Apache-1.0.txt exists.
-                identifiers = {identifier}
-                if identifier.endswith("+"):
-                    identifiers.add(identifier[:-1])
-                # Bad license
-                if not identifiers.intersection(project.license_map):
-                    report.bad_licenses.add(identifier)
-                # Missing license
-                if not identifiers.intersection(project.licenses):
-                    report.missing_licenses.add(identifier)
+        reuse_infos = project.reuse_info_of(path)
+        for reuse_info in reuse_infos:
+            for expression in reuse_info.spdx_expressions:
+                for identifier in _LICENSING.license_keys(expression):
+                    # A license expression akin to Apache-1.0+ should register
+                    # correctly if LICENSES/Apache-1.0.txt exists.
+                    identifiers = {identifier}
+                    if (
+                        plus_identifier := _strip_plus_from_identifier(
+                            identifier
+                        )
+                    ) != identifier:
+                        identifiers.add(plus_identifier)
+                    # Bad license
+                    if not identifiers.intersection(project.license_map):
+                        report.bad_licenses.add(identifier)
+                    # Missing license
+                    if not identifiers.intersection(project.licenses):
+                        report.missing_licenses.add(identifier)
 
-                # Add license to report.
-                report.spdxfile.licenses_in_file.append(identifier)
+                    # Add license to report.
+                    report.licenses_in_file.append(identifier)
+
+        if not add_license_concluded:
+            report.license_concluded = "NOASSERTION"
+        elif not any(reuse_info.spdx_expressions for reuse_info in reuse_infos):
+            report.license_concluded = "NONE"
+        else:
+            # Merge all the license expressions together, wrapping them in
+            # parentheses to make sure an expression doesn't spill into another
+            # one. The extra parentheses will be removed by the roundtrip
+            # through parse() -> simplify() -> render().
+            report.license_concluded = (
+                _LICENSING.parse(
+                    " AND ".join(
+                        f"({expression})"
+                        for reuse_info in reuse_infos
+                        for expression in reuse_info.spdx_expressions
+                    ),
+                )
+                .simplify()
+                .render()
+            )
 
         # Copyright text
-        report.spdxfile.copyright = "\n".join(sorted(spdx_info.copyright_lines))
-
+        report.copyright = "\n".join(
+            map(
+                str,
+                sorted(
+                    line
+                    for reuse_info in reuse_infos
+                    for line in reuse_info.copyright_notices
+                ),
+            )
+        )
+        # Source of licensing and copyright info
+        report.reuse_infos = reuse_infos
         return report
 
-    def __hash__(self):
-        if self.spdxfile.chk_sum is not None:
-            return hash(self.spdxfile.name + self.spdxfile.chk_sum)
-        return super().__hash__(self)
+    def __hash__(self) -> int:
+        if self.chk_sum is not None:
+            return hash(self.name + self.chk_sum)
+        return super().__hash__()
+
+
+def format_creator(creator: str | None) -> str:
+    """Render the creator field based on the provided flag"""
+    if creator is None:
+        return "Anonymous ()"
+    if "(" in creator and creator.endswith(")"):
+        # The creator field already contains an email address
+        return creator
+    return creator + " ()"

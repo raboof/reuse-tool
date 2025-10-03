@@ -9,8 +9,11 @@ jobs=0
 
 [MESSAGES CONTROL]
 
-disable=R0801,
+disable=duplicate-code,
          logging-fstring-interpolation,
+         implicit-str-concat,
+         inconsistent-quotes,
+         too-many-positional-arguments
 enable=useless-suppression
 
 [REPORTS]
@@ -120,5 +123,5 @@ valid-metaclass-classmethod-first-arg=cls
 
 
 [EXCEPTIONS]
-overgeneral-exceptions=BaseException,
-                       Exception
+overgeneral-exceptions=builtins.BaseException,
+                       builtins.Exception
